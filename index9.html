@@ -1,0 +1,1215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WorldBlend — Immersive Ad Studio</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Local embeddings -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/universal-sentence-encoder@1.3.3/dist/universal-sentence-encoder.min.js"></script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --accent:#22d3ee;
+      --vignette: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,.35) 100%);
+    }
+    body { font-family: 'Inter', sans-serif; }
+    .loader{border:4px solid #f3f3f3;border-top:4px solid #38bdf8;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .list-item{transition:all .2s ease-in-out}
+    .list-item.selected{background:#38bdf8;color:#fff}
+    .list-item:hover:not(.selected){background:#374151}
+    .modal-bg{background:rgba(0,0,0,.7)}
+    .ad-video-container{overflow:hidden;width:100%;height:100%;position:absolute;inset:0}
+    .ad-img{width:100%;height:100%;object-fit:cover}
+    .ad-frame-original{position:absolute;inset:0;opacity:1;transition:opacity .45s ease}
+    .ad-frame-composited{position:absolute;inset:0;opacity:0;transform:scale(1.01);transition:opacity .45s ease, transform 9s ease}
+    .ad-frame-composited.show{opacity:1;transform:scale(1.06)}
+    .scorebar{height:6px;border-radius:3px;background:linear-gradient(90deg,#22d3ee,#38bdf8)}
+    #err{position:fixed;right:12px;top:12px;max-width:52ch;z-index:9999;display:none}
+    .vignette:before{content:"";position:absolute;inset:0;background:var(--vignette);pointer-events:none;z-index:25;}
+    .chip{background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 85%, #000) 0%, var(--accent) 100%);box-shadow:0 6px 18px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.08) inset}
+    .toggle { --on:#22d3ee; --off:#475569; }
+    .toggle input { display:none; }
+    .toggle .track{ width:44px;height:24px;border-radius:9999px;background:var(--off);position:relative;transition:.2s; }
+    .toggle input:checked + .track{ background:var(--on); }
+    .toggle .thumb{ position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:.2s; }
+    .toggle input:checked + .track .thumb{ transform:translateX(20px); }
+    .btn{display:inline-flex;align-items:center;gap:.5rem;padding:.4rem .65rem;border-radius:.6rem;background:#334155;border:1px solid #475569}
+    .btn:hover{background:#3b475e}
+    .btn-ghost{background:transparent;border-color:#475569}
+    .btn-cyan{background:#06b6d4;border-color:#06b6d4}
+    .btn-cyan:hover{background:#0891b2}
+    .textarea{width:100%;min-height:110px;background:#111827;border:1px solid #374151;border-radius:.6rem;padding:.6rem}
+  </style>
+</head>
+<body class="bg-gray-900 text-white antialiased">
+  <div id="err" class="bg-red-500/10 text-red-200 border border-red-500/40 rounded-lg p-3 text-xs whitespace-pre-wrap"></div>
+
+  <div class="container mx-auto p-4 md:p-6 max-w-screen-2xl">
+    <header class="text-center mb-6">
+      <h1 class="text-3xl md:text-4xl font-bold text-cyan-400">WorldBlend (v0) — Immersive Ad Studio</h1>
+      <p class="text-gray-400 mt-2">Developed by : Srikar Devulapalli</p>
+      <p>Scene-aware insertion • Hybrid semantic ranking • Voice-over micro-stories</p>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <!-- Left -->
+      <aside class="lg:col-span-3 bg-gray-800 p-4 rounded-2xl shadow-lg flex flex-col">
+        <div class="mb-4">
+          <h2 class="text-xl font-bold mb-2 text-white">API Key</h2>
+          <input
+            type="password"
+            id="api-key-input"
+            placeholder="Enter your Google AI Studio API Key"
+            class="w-full bg-gray-700 border border-gray-600 rounded-lg p-2 text-sm"
+            autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"
+            name="api_key_no_autofill"
+          >
+          <p class="text-xs text-gray-400 mt-1">Images: <span class="font-semibold">gemini-2.0-flash-preview-image-generation</span> • Text: <span class="font-semibold">gemini-2.0-flash</span></p>
+        </div>
+
+        <!-- Voice Controls -->
+        <div class="mb-4">
+          <h2 class="text-xl font-bold mb-2 text-white">Narration</h2>
+          <div class="space-y-2">
+            <label class="block text-sm text-gray-300">Voice</label>
+            <select id="voice-select" class="w-full bg-gray-700 border border-gray-600 rounded-lg p-2 text-sm">
+              <option>Loading voices…</option>
+            </select>
+            <label class="block text-sm text-gray-300 mt-2">Style</label>
+            <select id="voice-style" class="w-full bg-gray-700 border border-gray-600 rounded-lg p-2 text-sm">
+              <option value="balanced">Balanced (default)</option>
+              <option value="upbeat">Upbeat</option>
+              <option value="calm">Calm</option>
+            </select>
+            <button id="test-voice" class="mt-2 w-full bg-gray-700 hover:bg-gray-600 rounded-lg py-2 text-sm">Test Voice</button>
+          </div>
+        </div>
+
+        <div id="users-module" class="mb-4"></div>
+        <div id="videos-module" class="mb-4"></div>
+        <div id="products-module"></div>
+      </aside>
+
+      <!-- Center -->
+      <main class="lg:col-span-6 bg-gray-800 p-4 rounded-2xl shadow-lg">
+        <div class="relative w-full aspect-video bg-black rounded-lg overflow-hidden">
+          <video id="main-video" class="w-full h-full absolute top-0 left-0 z-10" crossorigin="anonymous" controls></video>
+          <div id="ad-overlay" class="absolute inset-0 bg-black/0 flex-col items-center justify-center z-20 p-0 opacity-0 pointer-events-none">
+            <div id="ad-loader" class="w-full h-full flex flex-col items-center justify-center hidden">
+              <div class="loader"></div>
+              <p class="mt-4 text-lg font-medium">Generating Immersive Ad...</p>
+            </div>
+            <div id="ad-content" class="hidden w-full h-full"></div>
+          </div>
+        </div>
+
+        <div class="mt-4 grid grid-cols-2 gap-2 items-center">
+          <button id="generate-ad-btn" class="col-span-2 w-full bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-3 px-4 rounded-lg transition duration-300">
+            Generate Ad at Current Time (<span id="current-time">0.00</span>s)
+          </button>
+
+          <label class="flex items-center gap-2 text-xs text-gray-300">
+            <span class="toggle">
+              <input id="fast-mode" type="checkbox">
+              <span class="track"><span class="thumb"></span></span>
+            </span>
+            <span>⚡ Fast Mode (keeps 1 quick verify)</span>
+          </label>
+          <p class="text-right text-xs text-gray-500">Pick a product in the ranking panel—or we’ll use the top match.</p>
+        </div>
+      </main>
+
+      <!-- Right -->
+      <section class="lg:col-span-3 bg-gray-800 p-4 rounded-2xl shadow-lg flex flex-col">
+        <h2 class="text-xl font-bold mb-3 border-b border-gray-700 pb-2 text-white">Top Ad Matches (Semantic)</h2>
+        <div id="ranking-panel" class="space-y-2 mb-4 max-h-[55vh] overflow-y-auto pr-1">
+          <p class="text-gray-500 text-sm">Ranking will appear here…</p>
+        </div>
+
+        <h2 class="text-xl font-bold mb-3 border-b border-gray-700 pb-2 text-white">Generated Ad Catalog</h2>
+        <div id="ad-log" class="space-y-4 overflow-y-auto flex-grow min-h-0 pr-2">
+          <p class="text-gray-500 text-center">Generated ads will appear here...</p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="edit-modal" class="fixed inset-0 z-50 items-center justify-center hidden">
+    <div class="modal-bg absolute inset-0"></div>
+    <div class="relative bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-lg">
+      <h3 id="modal-title" class="text-2xl font-bold mb-4">Edit Item</h3>
+      <div id="modal-body"></div>
+      <div class="mt-6 flex justify-end space-x-4">
+        <button id="modal-delete" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg mr-auto">Delete</button>
+        <button id="modal-cancel" class="px-4 py-2 bg-gray-600 rounded-lg">Cancel</button>
+        <button id="modal-save" class="px-4 py-2 bg-cyan-500 rounded-lg">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="video-upload-input" class="hidden" accept="video/*">
+
+  <script>
+    /* ========= Error bubble ========= */
+    const errBox = document.getElementById('err');
+    const showErr = (msg) => { errBox.textContent = String(msg).slice(0, 2000); errBox.style.display = 'block'; };
+    window.addEventListener('error', e => showErr(e.message || e.error || 'Unknown error'));
+    window.addEventListener('unhandledrejection', e => showErr((e.reason && (e.reason.stack||e.reason.message)) || String(e.reason)));
+
+    /* ========= State & DB ========= */
+    let appState = { selectedUserId: null, selectedVideoId: null, adLog: [], generatedAd: null, selectedProductIdForAd: null, lastRanking: [] };
+    let db = { users: [], videos: [], products: [] };
+
+    const defaultData = {
+      users: [
+        { id: 1, name: 'Alex (Gamer)', profile: 'Loves competitive FPS games, sci-fi movies, and high-tech gadgets. Follows e-sports leagues.', isDefault: true },
+        { id: 2, name: 'Brenda (Traveler)', profile: 'Passionate about hiking, nature photography, and sustainable travel. Planning a trip to see the Northern Lights.', isDefault: true },
+        { id: 3, name: 'Chris (Parent)', profile: 'A busy parent looking for family-friendly activities, healthy snacks, and educational toys for two young children.', isDefault: true },
+        { id: 4, name: 'Diana (Foodie)', profile: 'A gourmet home cook who loves exploring new recipes, watching cooking shows, and trying artisanal ingredients.', isDefault: true },
+        { id: 5, name: 'Ethan (Car Enthusiast)', profile: 'Follows Formula 1 racing, loves restoring classic cars, and watches high-octane action movies.', isDefault: true }
+      ],
+      videos: [
+        { id: 1, name: 'Big Buck Bunny', url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', isDefault: true },
+        { id: 2, name: 'Elephants Dream', url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4', isDefault: true },
+        { id: 3, name: 'For Bigger Blazes', url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', isDefault: true },
+        { id: 4, name: 'Sintel', url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4', isDefault: true },
+        { id: 5, name: 'Tears of Steel', url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4', isDefault: true }
+      ],
+      products: [
+        { id: 1, name: 'Quantum-Cola', features: 'Zero-calorie energy boost with a refreshing citrus taste.', imageUrl: '', visualClass:'', hints:'', isDefault: true },
+        { id: 2, name: 'Starlight Hiking Boots', features: 'Waterproof, breathable membrane and all-terrain grip.', imageUrl: '', visualClass:'', hints:'', isDefault: true },
+        { id: 3, name: 'CyberGlow Gaming Laptop', features: '240Hz display with liquid cooling for marathon sessions.', imageUrl: '', visualClass:'', hints:'', isDefault: true },
+        { id: 4, name: 'Edu-Bot Toy Robot', features: 'Teaches coding basics through playful challenges.', imageUrl: '', visualClass:'', hints:'', isDefault: true },
+        { id: 5, name: 'Aroma-Max Coffee Maker', features: 'Fresh-ground cups with silky microfoam at home.', imageUrl: '', visualClass:'', hints:'', isDefault: true },
+        { id: 6, name: 'Veloce Sports Car', features: '0–60 in 2.9 seconds and razor-sharp handling.', imageUrl: '', visualClass:'', hints:'', isDefault: true }
+      ]
+    };
+
+    /* ========= DOM ========= */
+    const videoEl = document.getElementById('main-video');
+    const currentTimeEl = document.getElementById('current-time');
+    const generateAdBtn = document.getElementById('generate-ad-btn');
+    const fastModeEl = document.getElementById('fast-mode');
+    const adOverlay = document.getElementById('ad-overlay');
+    const adLoader = document.getElementById('ad-loader');
+    const adContent = document.getElementById('ad-content');
+    const adLogContainer = document.getElementById('ad-log');
+    const rankingPanel = document.getElementById('ranking-panel');
+    const videoUploadInput = document.getElementById('video-upload-input');
+    const modal = document.getElementById('edit-modal');
+    const apiKeyInput = document.getElementById('api-key-input');
+    const voiceSelect = document.getElementById('voice-select');
+    const voiceStyle  = document.getElementById('voice-style');
+    const testVoiceBtn= document.getElementById('test-voice');
+
+    /* ========= Save/load ========= */
+    function saveDb(){ try{ localStorage.setItem('adGenDb', JSON.stringify(db)); }catch(e){} }
+    function loadDb(){
+      try{
+        const storedDb = localStorage.getItem('adGenDb');
+        db = storedDb ? JSON.parse(storedDb) : JSON.parse(JSON.stringify(defaultData));
+        if (!storedDb) saveDb();
+      }catch(e){ showErr(e); db = JSON.parse(JSON.stringify(defaultData)); }
+    }
+
+    /* ========= CRUD (Edit visible) ========= */
+    function createCrudModule(containerId, dbKey, title, fields){
+      const container = document.getElementById(containerId);
+      const render = () => {
+        const isUserModule = dbKey === 'users';
+        const isVideoModule = dbKey === 'videos';
+        const itemsHtml = db[dbKey].map(item => {
+          const isSelected = (isUserModule && appState.selectedUserId === item.id) || (isVideoModule && appState.selectedVideoId === item.id);
+          const canEdit = !item.isDefault;
+          const editButtonHtml = canEdit ? `<button class="edit-btn shrink-0 ml-2 px-2 py-1 rounded text-xs text-gray-300 hover:text-white hover:bg-gray-600" data-id="${item.id}">Edit</button>` : '';
+          if (isVideoModule && item.processing) {
+            return `<div class="p-3 rounded-lg bg-gray-700 opacity-50">
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="font-medium truncate">${item.name}</span>
+                        <div class="progress-bar mt-2 w-28"><div class="progress-bar-inner"></div></div>
+                      </div>
+                    </div>`;
+          }
+          return `<div class="list-item p-3 rounded-lg cursor-pointer ${isSelected ? 'selected' : ''}" data-id="${item.id}" data-type="${dbKey}">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-medium truncate max-w-[75%]">${escapeHtml(item.name)}</span>
+                      ${editButtonHtml}
+                    </div>
+                  </div>`;
+        }).join('');
+
+        const footerHtml = (dbKey==='videos')
+          ? `<button id="upload-video-btn" class="mt-3 w-full text-sm py-2 bg-gray-700 hover:bg-gray-600 rounded-lg">+ Upload Your Own</button>`
+          : `<button class="add-btn mt-3 w-full text-sm py-2 bg-gray-700 hover:bg-gray-600 rounded-lg">+ Add New</button>`;
+
+        container.innerHTML = `<h2 class="text-xl font-bold mb-2 text-white">${title}</h2><div class="space-y-2">${itemsHtml}</div>${footerHtml}`;
+      };
+
+      container.addEventListener('click', e => {
+        const target = e.target;
+        const listItem  = target.closest('.list-item');
+        const editBtn   = target.closest('.edit-btn');
+        const addBtn    = target.closest('.add-btn');
+        const uploadBtn = target.closest('#upload-video-btn');
+
+        if (editBtn) {
+          e.stopPropagation();
+          const id = parseInt(editBtn.dataset.id, 10);
+          const item = db[dbKey].find(i => i.id === id);
+          openModal(item, dbKey, fields, title);
+          return;
+        }
+        if (addBtn) { openModal(null, dbKey, fields, title); return; }
+        if (uploadBtn) { videoUploadInput.click(); return; }
+        if (listItem) {
+          const id = parseInt(listItem.dataset.id, 10);
+          if (dbKey === 'users') { appState.selectedUserId = id; refreshRanking(true); }
+          if (dbKey === 'videos') {
+            appState.selectedVideoId = id;
+            const video = db.videos.find(v => v.id === id);
+            if (video) { videoEl.src = video.url; appState.generatedAd = null; }
+          }
+          renderAll();
+        }
+      });
+      return { render };
+    }
+
+    function openModal(item, dbKey, fields, title){
+      const isNew = item === null;
+      modal.dataset.dbkey = dbKey;
+      modal.dataset.itemid = isNew ? 'null' : item.id;
+      modal.dataset.fields = JSON.stringify(fields);
+      document.getElementById('modal-title').innerText = `${isNew ? 'Add' : 'Edit'} ${title.slice(0, -1)}`;
+      const modalBody = document.getElementById('modal-body');
+      modalBody.innerHTML = fields.map(field => {
+        const val = item ? (item[field.id] ?? '') : '';
+        if (field.type === 'textarea') {
+          return `<div class="mb-4"><label class="block text-sm font-medium text-gray-300 mb-1">${field.label}</label><textarea id="modal-${field.id}" rows="4" class="textarea">${escapeHtml(val)}</textarea></div>`;
+        } else if (field.type === 'select') {
+          const opts = (field.options||[]).map(o=>`<option value="${o}" ${val===o?'selected':''}>${o||'(none)'}</option>`).join('');
+          return `<div class="mb-4"><label class="block text-sm font-medium text-gray-300 mb-1">${field.label}</label><select id="modal-${field.id}" class="w-full bg-gray-700 border border-gray-600 rounded-lg p-2">${opts}</select></div>`;
+        } else {
+          return `<div class="mb-4"><label class="block text-sm font-medium text-gray-300 mb-1">${field.label}</label><input type="text" id="modal-${field.id}" value="${escapeAttr(val)}" class="w-full bg-gray-700 border border-gray-600 rounded-lg p-2"></div>`;
+        }
+      }).join('');
+      document.getElementById('modal-delete').style.display = (isNew || (item && item.isDefault)) ? 'none' : 'block';
+      modal.style.display = 'flex';
+    }
+    function setupModalListeners(){
+      document.getElementById('modal-cancel').onclick = () => { modal.style.display = 'none'; };
+      document.getElementById('modal-delete').onclick = () => {
+        const dbKey = modal.dataset.dbkey;
+        const itemId = parseInt(modal.dataset.itemid);
+        if (dbKey === 'adLog') {
+          appState.adLog = appState.adLog.filter(a => a.id !== itemId);
+          renderAdLog(); modal.style.display='none'; return;
+        }
+        db[dbKey] = db[dbKey].filter(item => item.id !== itemId);
+        saveDb(); renderAll(); modal.style.display = 'none';
+        if (dbKey === 'products') { clearAugmentationCaches(); refreshRanking(true); }
+      };
+      document.getElementById('modal-save').onclick = () => {
+        const dbKey = modal.dataset.dbkey;
+        const itemId = modal.dataset.itemid;
+        const isNew = itemId === 'null';
+        const fields = JSON.parse(modal.dataset.fields);
+        let newItemData = {};
+        fields.forEach(field => { newItemData[field.id] = document.getElementById(`modal-${field.id}`).value; });
+
+        if (dbKey === 'adLog') {
+          const id = parseInt(itemId);
+          const idx = appState.adLog.findIndex(a => a.id === id);
+          if (idx>-1){ appState.adLog[idx] = { ...appState.adLog[idx], ...newItemData }; renderAdLog(); }
+          modal.style.display='none'; return;
+        }
+
+        if (isNew) {
+          const newItem = { id: Date.now(), ...newItemData, isDefault: false };
+          if (dbKey === 'videos') {
+            newItem.processing = true;
+            setTimeout(() => {
+              const video = db.videos.find(v => v.id === newItem.id);
+              if (video) { video.processing = false; saveDb(); renderAll(); }
+            }, 3000);
+          }
+          db[dbKey].push(newItem);
+        } else {
+          const id = parseInt(itemId);
+          const idx = db[dbKey].findIndex(i => i.id === id);
+          if (idx > -1) db[dbKey][idx] = { ...db[dbKey][idx], ...newItemData };
+        }
+        saveDb(); renderAll(); modal.style.display = 'none';
+        if (dbKey === 'products' || dbKey === 'users') { clearAugmentationCaches(); refreshRanking(true); }
+      };
+    }
+    function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+    function escapeAttr(s){return String(s).replace(/"/g,'&quot;')}
+
+    /* ========= Upload video ========= */
+    document.getElementById('video-upload-input').addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (file && file.type.startsWith('video/')) {
+        const newVideoId = Date.now();
+        const videoUrl = URL.createObjectURL(file);
+        const newVideo = { id: newVideoId, name: file.name, url: videoUrl, isUploaded: true, isDefault: false };
+        db.videos.push(newVideo); saveDb();
+        appState.selectedVideoId = newVideoId; videoEl.src = newVideo.url; renderAll();
+      }
+    });
+
+    /* ========= Timeline trigger ========= */
+    videoEl.addEventListener('timeupdate', () => { 
+      currentTimeEl.textContent = videoEl.currentTime.toFixed(2);
+      const ad = appState.generatedAd;
+      if (ad && !ad.hasBeenTriggered && videoEl.currentTime >= ad.timestamp) {
+        ad.hasBeenTriggered = true; videoEl.pause(); displayAd(ad.data, ad.product, ad.originalFrame);
+      }
+      if (!window._lastSceneRank || (Date.now() - window._lastSceneRank) > 7000){
+        window._lastSceneRank = Date.now();
+        refreshRanking(true);
+      }
+    });
+
+    generateAdBtn.addEventListener('click', async () => {
+      if (!apiKeyInput.value) { alert('Please enter your Google AI API Key to generate ads.'); return; }
+      if (!appState.selectedUserId) { alert('Please select a user profile first.'); return; }
+
+      cancelAllSpeech();
+      appState.generatedAd = null;
+      const adTimestamp = videoEl.currentTime; videoEl.pause();
+      adLoader.style.display = 'flex'; adContent.style.display = 'none'; adOverlay.style.opacity = 1; adOverlay.style.pointerEvents = 'auto';
+
+      try {
+        const { b64, png } = captureVideoFrame(videoEl);
+        if (!b64) throw new Error("Could not capture video frame.");
+        const user = db.users.find(u => u.id === appState.selectedUserId) || db.users[0];
+
+        const chosen = await ensureRankingAndGetChosenProduct(user.profile);
+        const adData = await generateAdCreative(user.profile, chosen, b64);
+
+        appState.generatedAd = { data: adData, product: chosen, timestamp: adTimestamp, hasBeenTriggered: false, originalFrame: png };
+        logAd(adData, user, chosen, adTimestamp);
+
+        adOverlay.style.opacity = 0; adOverlay.style.pointerEvents = 'none'; videoEl.play();
+      } catch (error) {
+        console.error("Error generating ad:", error);
+        showErr(error.stack || error.message || error);
+        displayErrorAd("Generator is busy. Try again.");
+      }
+    });
+
+    videoEl.addEventListener('seeked', () => {
+      if (appState.generatedAd && videoEl.currentTime < appState.generatedAd.timestamp) {
+        appState.generatedAd.hasBeenTriggered = false;
+      }
+    });
+
+    function captureVideoFrame(videoSource){
+      if (videoSource.readyState < 2) return { b64:null, png:null };
+      try{
+        const canvas = document.createElement('canvas');
+        canvas.width = videoSource.videoWidth; canvas.height = videoSource.videoHeight;
+        const ctx = canvas.getContext('2d'); ctx.drawImage(videoSource,0,0,canvas.width,canvas.height);
+        const jpg = canvas.toDataURL('image/jpeg', 0.82);
+        const b64 = jpg.split(',')[1];
+        return { b64, png: jpg };
+      }catch(e){ return { b64:null, png:null }; }
+    }
+
+    /* ===============================
+       Scene heuristics (quick cues)
+       =============================== */
+    function analyzeSceneHeuristics(video){
+      const w = 96, h = 54;
+      const c = document.createElement('canvas'); c.width=w; c.height=h;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      try { ctx.drawImage(video, 0, 0, w, h); } catch(e){ return { cue: 'versatile setting', meta: {} }; }
+      const img = ctx.getImageData(0,0,w,h).data;
+      let r=0,g=0,b=0,br=0; const n=w*h;
+      for (let i=0;i<img.length;i+=4){
+        r+=img[i]; g+=img[i+1]; b+=img[i+2];
+        br += 0.2126*img[i] + 0.7152*img[i+1] + 0.0722*img[i+2];
+      }
+      r/=n; g/=n; b/=n; br/=n;
+      const max = Math.max(r,g,b), min = Math.min(r,g,b);
+      const sat = max ? (max-min)/max : 0;
+
+      let cue = 'versatile setting';
+      if (br>180 && b>g && b>r) cue='bright blue-sky vibe';
+      else if (br>170 && g>r && g>b) cue='sunlit green outdoors';
+      else if (br<90  && (b>120 || r>140)) cue='moody night lights';
+      else if (r>160 && br>120) cue='warm indoor glow';
+      else if (sat<0.08) cue='soft overcast look';
+      else if (g>160) cue='lush natural tones';
+
+      return { cue, meta:{avgR:r,avgG:g,avgB:b,bright:br,sat} };
+    }
+
+    /* ========= Placement preference from cue ========= */
+    function placementFromCue(cue, visualClass){
+      if (/sunlit green outdoors|lush natural/.test(cue)) return (visualClass==='boots') ? 'on rock' : 'on ground';
+      if (/bright blue-sky/.test(cue)) return (visualClass==='beverage_can') ? 'on bench' : 'on table';
+      if (/moody night/.test(cue)) return (visualClass==='car') ? 'on road shoulder' : 'on dashboard';
+      if (/warm indoor/.test(cue)) return 'on table';
+      if (/soft overcast/.test(cue)) return 'on ground';
+      return 'on table';
+    }
+
+    /* =========================================================
+       LLM + embedding RANKING
+       ========================================================= */
+    const TEXT_MODEL = 'gemini-2.0-flash';
+    let useModelPromise = null;
+
+    function getEmbedder(){ if (!useModelPromise) useModelPromise = use.load(); return useModelPromise; }
+    async function embedTexts(texts){
+      const model = await getEmbedder();
+      const emb = await tf.tidy(()=>model.embed(texts));
+      const arr = await emb.array(); emb.dispose(); return arr;
+    }
+    function cosine(a,b){ let dot=0,na=0,nb=0; for(let i=0;i<a.length;i++){const x=a[i],y=b[i]; dot+=x*y; na+=x*x; nb+=y*y;} const d=Math.sqrt(na)*Math.sqrt(nb)||1e-12; return dot/d; }
+    function rawCosineToPct(c){ const x = Math.max(-1, Math.min(1, c)); return Math.round(((x+1)/2)*100); }
+
+    const profileAugCache = new Map();
+    const productAugCache = new Map();
+    let inflightAug = new Map();
+
+    let anchorsCache = { list: null, vecs: null, ts: 0, sig: null };
+    function parseJsonLoose(text){ try { const m = String(text||'').match(/\{[\s\S]*\}|\[[\s\S]*\]/); if (!m) return null; return JSON.parse(m[0]); } catch { return null; } }
+    async function llmGenerate(prompt, extraConfig={}){
+      const key = apiKeyInput.value.trim();
+      if (!key) throw new Error('Missing API key');
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${key}`;
+      const payload = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 220, ...extraConfig } };
+      const RETRIABLE = new Set([408,429,500,502,503,504]);
+      let lastErrText = '';
+      for (let attempt=0; attempt<(fastModeEl.checked?2:5); attempt++){
+        try{
+          const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+          if (!res.ok){
+            const txt = await res.text().catch(()=> '');
+            lastErrText = txt || `HTTP ${res.status}`;
+            if (RETRIABLE.has(res.status)){ await new Promise(r=>setTimeout(r, 650 * (attempt+1))); continue; }
+            throw new Error(`Text API ${res.status}: ${txt}`);
+          }
+          const data = await res.json();
+          const text = data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join(' ') || '';
+          return text.trim();
+        }catch(e){ lastErrText = e.message || String(e); await new Promise(r=>setTimeout(r, 650 * (attempt+1))); }
+      }
+      throw new Error(lastErrText || 'Text API failed after retries');
+    }
+
+    async function augmentProfileLLM(profile){
+      const key = 'P:'+profile;
+      if (profileAugCache.has(key)) return profileAugCache.get(key);
+      if (inflightAug.has(key)) return inflightAug.get(key);
+      const p = (async ()=>{
+        const prompt = [
+          `Expand this USER PROFILE into semantically rich buying intents and contexts.`,
+          `Profile: """${profile}"""`,
+          `Return ONLY a comma-separated list (12–20) of short phrases; no prose, no numbering.`
+        ].join('\n');
+        try{
+          const aug = await llmGenerate(prompt);
+          const clean = aug.replace(/[\r\n]+/g,' ').replace(/\s*,\s*/g,', ').replace(/\s+/g,' ').trim();
+          const combined = `${profile}\nSemantic intents: ${clean}`;
+          profileAugCache.set(key, combined);
+          return combined;
+        }catch(e){
+          const fallback = String(profile||'');
+          profileAugCache.set(key, fallback); return fallback;
+        }finally{ inflightAug.delete(key); }
+      })();
+      inflightAug.set(key,p);
+      return p;
+    }
+    async function augmentProductLLM(product){
+      const key = 'PR:'+product.id;
+      if (productAugCache.has(key)) return productAugCache.get(key);
+      if (inflightAug.has(key)) return inflightAug.get(key);
+      const p = (async ()=>{
+        const base = `${product.name}. ${product.features||''}`.trim();
+        const hint = (product.hints||'').trim();
+        const prompt = [
+          `Given a PRODUCT NAME and features, synthesize concise features and adjacent intents (brand-agnostic).`,
+          `Return ONLY a comma-separated list (12–20) of short phrases.`,
+          `Input: """${base}${hint?(' | Hints: '+hint):''}"""`,
+        ].join('\n');
+        try{
+          const aug = await llmGenerate(prompt);
+          const clean = aug.replace(/[\r\n]+/g,' ').replace(/\s*,\s*/g,', ').replace(/\s+/g,' ').trim();
+          const combined = `${product.name}. ${product.features||''}\nSemantic intents: ${clean}`;
+          productAugCache.set(key, combined);
+          return combined;
+        }catch(e){
+          const fallback = `${product.name}. ${product.features||''}`.trim();
+          productAugCache.set(key, fallback); return fallback;
+        }finally{ inflightAug.delete(key); }
+      })();
+      inflightAug.set(key,p);
+      return p;
+    }
+    function clearAugmentationCaches(){
+      profileAugCache.clear();
+      productAugCache.clear();
+      anchorsCache = { list:null, vecs:null, ts:0, sig:null };
+      appState.lastRanking = [];
+    }
+
+    async function generateConceptualAnchorsLLM(catalog, users){
+      const signature = JSON.stringify({p: catalog.map(p=>({n:p.name,f:(p.features||'').slice(0,80)})), u: users.map(u=>u.profile)});
+      if (anchorsCache.list && anchorsCache.sig === signature) return anchorsCache.list;
+      const prompt = [
+        `From these PRODUCTS and USER PROFILES, derive 6–8 high-level conceptual "category anchors".`,
+        `Return STRICT JSON array of {"key":"slug","desc":"intent"} objects.`,
+        `Products:`,
+        catalog.map(p=>`- ${p.name}: ${(p.features||'').trim()||'(no features provided)'}`).join('\n'),
+        `Profiles:`,
+        users.map(u=>`- ${u.name||'User'}: ${u.profile}`).join('\n')
+      ].join('\n');
+      let anchors = parseJsonLoose(await llmGenerate(prompt));
+      if (!Array.isArray(anchors) || !anchors.length) {
+        anchors = catalog.slice(0,8).map(p=>{
+          const key = (p.name||'anchor').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,24) || `anchor_${Math.random().toString(36).slice(2,7)}`;
+          return { key, desc: `${p.name} intents` };
+        });
+      }
+      const seen = new Set(); anchors = anchors.filter(a=>a && a.key && !seen.has(a.key) && seen.add(a.key));
+      anchorsCache.list = anchors; anchorsCache.sig = signature; anchorsCache.vecs = null; anchorsCache.ts = Date.now();
+      return anchors;
+    }
+    async function ensureAnchorVecs(){
+      if (anchorsCache.list && anchorsCache.vecs) return anchorsCache.vecs;
+      const descs = (anchorsCache.list||[]).map(a=>a.desc);
+      const vecs = await embedTexts(descs);
+      anchorsCache.vecs = vecs.map(v=>Float32Array.from(v));
+      return anchorsCache.vecs;
+    }
+
+    async function rankProductsSemantic(profile, catalog, sceneCueText){
+      const fast = fastModeEl.checked;
+      try{
+        if (fast){
+          const productTexts = catalog.map(p => `${p.name}. ${p.features||''}`);
+          const all = [profile, `Scene: ${sceneCueText||'versatile'}`, ...productTexts];
+          const vecs = await embedTexts(all);
+          const profileVec = Float32Array.from(vecs[0]);
+          const sceneVec   = Float32Array.from(vecs[1]);
+          const productVecs= vecs.slice(2).map(v=>Float32Array.from(v));
+          const items = catalog.map((p,i)=>{
+            const base = cosine(profileVec, productVecs[i]);
+            const sceneBoost = cosine(sceneVec, productVecs[i]);
+            const final = 0.7*base + 0.3*sceneBoost;
+            return { product:p, score:final, absPct: rawCosineToPct(final) };
+          }).sort((a,b)=>b.score-a.score);
+          return items;
+        } else {
+          await generateConceptualAnchorsLLM(catalog, db.users);
+          const anchorVecs = await ensureAnchorVecs();
+          const profileText = await augmentProfileLLM(profile);
+          const productTexts = await Promise.all(catalog.map(p=>augmentProductLLM(p)));
+          const sceneText   = `Current scene vibe: ${sceneCueText||'versatile setting'}.`;
+          const all = [profileText, sceneText, ...productTexts];
+          const vecs = await embedTexts(all);
+          const profileVec = Float32Array.from(vecs[0]);
+          const sceneVec   = Float32Array.from(vecs[1]);
+          const productVecs= vecs.slice(2).map(v=>Float32Array.from(v));
+
+          const items = catalog.map((p,i)=>{
+            const baseCos = cosine(profileVec, productVecs[i]);
+            const sceneBoost  = cosine(sceneVec, productVecs[i]);
+            const anchorBoost = Math.max(...anchorVecs.map(v=>cosine(productVecs[i], v)));
+            const final = 0.60*baseCos + 0.20*anchorBoost + 0.20*sceneBoost;
+            return { product:p, score:final, absPct: rawCosineToPct(final) };
+          }).sort((a,b)=> b.score - a.score);
+          return items;
+        }
+      }catch(e){
+        console.warn('Semantic ranking failed', e);
+        const prof = (profile||'').toLowerCase();
+        const cue  = (sceneCueText||'').toLowerCase();
+        return catalog.map(p=>{
+          const t = (p.name+' '+(p.features||'')).toLowerCase();
+          const overlap = t.split(/\W+/).filter(w=>prof.includes(w) || cue.includes(w)).length;
+          const s = overlap/10;
+          return { product:p, score:s, absPct: Math.min(95, 40 + overlap*8) };
+        }).sort((a,b)=>b.score-a.score);
+      }
+    }
+
+    async function ensureRankingAndGetChosenProduct(profile){
+      if (!appState.lastRanking.length) { await refreshRanking(true); }
+      const userChoice = appState.selectedProductIdForAd;
+      if (userChoice) {
+        const p = db.products.find(x=>x.id===userChoice);
+        if (p) return p;
+      }
+      return (appState.lastRanking[0]?.product) || db.products[0];
+    }
+
+    async function refreshRanking(useScene=false){
+      const user = db.users.find(u=>u.id === appState.selectedUserId) || db.users[0];
+      if (!user) return;
+      const sceneCue = useScene ? analyzeSceneHeuristics(videoEl).cue : 'versatile setting';
+      rankingPanel.innerHTML = `<div class="text-sm text-gray-400 flex items-center gap-2"><span class="loader" style="width:18px;height:18px;border-width:3px;border-top-color:#22d3ee"></span> Computing semantic matches…</div>`;
+      const ranked = await rankProductsSemantic(user.profile, db.products, sceneCue);
+      appState.lastRanking = ranked;
+      renderRanking();
+    }
+    fastModeEl?.addEventListener('change', ()=> refreshRanking(true));
+
+    function renderRanking(){
+      if (!appState.lastRanking.length) {
+        rankingPanel.innerHTML = `<p class="text-gray-500 text-sm">No products available.</p>`;
+        return;
+      }
+      const selectedId = appState.selectedProductIdForAd;
+
+      rankingPanel.innerHTML = appState.lastRanking.map(({product, absPct}, idx)=>{
+        const widthPct = Math.max(3, Math.min(100, absPct));
+        const sel = selectedId === product.id ? 'ring-2 ring-cyan-400 bg-cyan-500/10' : 'hover:bg-gray-700';
+        return `
+          <div class="p-3 rounded-lg bg-gray-700/50 ${sel} cursor-pointer" data-pid="${product.id}">
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-sm font-semibold ${idx===0?'text-cyan-300':'text-white'} truncate">${idx+1}. ${escapeHtml(product.name)}</div>
+                <div class="text-xs text-gray-300 truncate">${escapeHtml(product.features||'')}</div>
+              </div>
+              <div class="text-xs text-cyan-300 w-12 text-right">${absPct}%</div>
+            </div>
+            <div class="mt-2 w-full bg-gray-600/60 rounded-full overflow-hidden">
+              <div class="scorebar" style="width:${widthPct}%"></div>
+            </div>
+          </div>`;
+      }).join('');
+
+      rankingPanel.querySelectorAll('[data-pid]').forEach(el=>{
+        el.addEventListener('click', ()=>{
+          const pid = parseInt(el.getAttribute('data-pid'),10);
+          appState.selectedProductIdForAd = pid;
+          renderRanking();
+        });
+      });
+    }
+
+    /* ========= VOICE ========= */
+    let availableVoices = [];
+    function loadVoices(){
+      availableVoices = window.speechSynthesis.getVoices() || [];
+      voiceSelect.innerHTML = '';
+      if (!availableVoices.length){
+        const opt = document.createElement('option');
+        opt.textContent = 'No voices found'; voiceSelect.appendChild(opt); return;
+      }
+      availableVoices.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.voiceURI; opt.textContent = `${v.name} (${v.lang})${v.default?' — default':''}`;
+        voiceSelect.appendChild(opt);
+      });
+      const stored = localStorage.getItem('adVoiceURI');
+      if (stored) voiceSelect.value = stored;
+    }
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    voiceSelect.addEventListener('change', ()=> localStorage.setItem('adVoiceURI', voiceSelect.value));
+    voiceStyle.addEventListener('change', ()=> localStorage.setItem('adVoiceStyle', voiceStyle.value));
+
+    function getSelectedVoice(){
+      const uri = voiceSelect.value;
+      return availableVoices.find(v => v.voiceURI === uri) || availableVoices.find(v=>v.default) || availableVoices[0];
+    }
+    function getVoiceBaseDefaults(voice){
+      const name = (voice?.name || '').toLowerCase();
+      const lang = (voice?.lang || '').toLowerCase();
+      if (/female|woman|samantha|susan|victoria|zira|alloy|ava|luna/.test(name)) return { rate: 1.08, pitch: 1.08 };
+      if (/male|man|daniel|fred|alex|google uk english male|english \(us\)/.test(name)) return { rate: 1.02, pitch: 0.98 };
+      if (/en-/.test(lang)) return { rate: 1.05, pitch: 1.02 };
+      return { rate: 1.05, pitch: 1.02 };
+    }
+    function applyStyle(base, style){
+      if (style==='upbeat')   return { rate: base.rate*1.08, pitch: base.pitch*1.07 };
+      if (style==='calm')     return { rate: base.rate*0.93, pitch: base.pitch*0.94 };
+      return { rate: base.rate, pitch: base.pitch };
+    }
+    function getCurrentRate(){ const v=getSelectedVoice(); const base=getVoiceBaseDefaults(v); const styled=applyStyle(base, voiceStyle.value||'balanced'); return Math.min(1.5, Math.max(0.7, styled.rate)); }
+    function getCurrentPitch(){ const v=getSelectedVoice(); const base=getVoiceBaseDefaults(v); const styled=applyStyle(base, voiceStyle.value||'balanced'); return Math.min(2.0, Math.max(0.5, styled.pitch)); }
+    function cancelAllSpeech(){ try{ window.speechSynthesis.cancel(); }catch(e){} }
+
+    // Speak helper — adaptive guard (prevents early cutoff)
+    const MAX_VO_SECS = 16.0;
+    function splitSentences(text){ const m=(text||'').match(/[^.!?]+[.!?]+|\S+$/g); return m?m.map(s=>s.trim()).filter(Boolean):[]; }
+    function estimateMs(text, rate){ const words=(text||'').trim().split(/\s+/).filter(Boolean).length; const wps=2.6*(rate||1.0); return Math.ceil((words/Math.max(0.1,wps))*1000); }
+    function fitToTime(text, rate = 1.08, maxSec = 12.0){
+      const capMs = maxSec*1000, sents = splitSentences(text);
+      let out='', used=0;
+      for (const s of sents){
+        const ms=estimateMs(s, rate);
+        if (used+ms>capMs) break;
+        out += (out?' ':'')+s;
+        used+=ms;
+      }
+      if (!out) {
+        const words = (text||'').split(/\s+/).filter(Boolean);
+        const msPerWord = 1000/(2.6*rate);
+        const take = Math.max(6, Math.floor((capMs-300)/msPerWord));
+        out = words.slice(0,take).join(' ');
+      }
+      if (!/[.!?]$/.test(out)) out += '.';
+      return out;
+    }
+    function sanitizeCopy(text){
+      if (!text) return '';
+      const banned = /(i\s*will|we\s*will|i['’]ll|we['’]ll|composit|insert|photoshop|overlay|render|prompt|ai\b|model\b|frame\b|scene\b|camera\b|image\b|editing|blend(?:ing)?|placement|swap)/i;
+      const sentences = (text.match(/[^.!?]+[.!?]+|\S+$/g) || []).map(s=>s.trim());
+      const kept = sentences.filter(s => !banned.test(s));
+      let out = kept.join(' ').replace(/\s+/g,' ').trim();
+      if (!out) out = text.replace(banned,'').replace(/\s+/g,' ').trim();
+      out = out.replace(/^[-–—\s]*(note|disclaimer)[:\-]\s*/i,'').trim();
+      return out;
+    }
+
+    /* ===== Conversational rewrite utilities (NEW) ===== */
+    const ADVERB_DROP = /\b(absolutely|actually|amazingly|basically|clearly|completely|deeply|easily|entirely|extremely|genuinely|highly|incredibly|literally|perfectly|powerfully|quickly|really|remarkably|simply|seamlessly|seriously|totally|truly|very)\b/gi;
+    function stripFluff(str){ return (str||'').replace(ADVERB_DROP,'').replace(/\s{2,}/g,' ').trim(); }
+    function featureSnippet(features){
+      let f = String(features||'').replace(/[.?!]+$/,' ').replace(/\s+/g,' ').trim();
+      // prefer up to first comma/semicolon/“with/and/for”
+      const cut = f.split(/[;,.]/)[0] || f;
+      // compress common fillers
+      f = cut.replace(/\b(experience|enhanced|advanced|ultimate|premium|state[-\s]?of[-\s]?the[-\s]?art|next[-\s]?level)\b/gi,'')
+             .replace(/\butilize(s|d)?\b/gi,'use')
+             .replace(/\bcapability|capabilities\b/gi,'performance')
+             .replace(/\band\b/gi,'and')
+             .replace(/\bwith\b/gi,'with')
+             .replace(/\s{2,}/g,' ').trim();
+      // keep it short
+      const words = f.split(' ').filter(Boolean).slice(0,12);
+      return words.join(' ').replace(/\s{2,}/g,' ').trim() || 'fast, reliable performance';
+    }
+    function conversationalScript(product, cue, tagline){
+      const feat = featureSnippet(product.features);
+      // Ensure product name appears exactly once
+      const name = product.name;
+      // Two clear sentences; last is the tagline.
+      let body = `${name} helps you with ${feat}. ${tagline}.`;
+      body = stripFluff(body);
+      body = body.replace(/\s{2,}/g,' ').trim();
+      return body;
+    }
+
+    function speakScript(text, onDone){
+      cancelAllSpeech();
+      const v = getSelectedVoice();
+      const u = new SpeechSynthesisUtterance(text || '');
+      u.voice = v; u.lang = v?.lang || 'en-US';
+      u.rate = getCurrentRate(); u.pitch = getCurrentPitch(); u.volume = 1.0;
+
+      let finished = false;
+      const done = () => { if (!finished){ finished=true; onDone && onDone(); } };
+      const guardMs = Math.min(MAX_VO_SECS*1000, estimateMs(text, u.rate) + 2000);
+      const guard = setTimeout(()=>{ cancelAllSpeech(); done(); }, guardMs);
+      u.onend = () => { clearTimeout(guard); done(); };
+      u.onerror = () => { clearTimeout(guard); done(); };
+      try { window.speechSynthesis.speak(u); } catch(_) { done(); }
+    }
+
+    // Robust voice test
+    async function ensureVoicesReady(){
+      for (let i=0;i<10;i++){
+        const v = window.speechSynthesis.getVoices();
+        if (v && v.length) return v;
+        await new Promise(r=>setTimeout(r, 150));
+      }
+      return window.speechSynthesis.getVoices() || [];
+    }
+    document.getElementById('test-voice').addEventListener('click', async ()=>{
+      await ensureVoicesReady(); loadVoices();
+      speakScript("This is your selected voice. Sounds good, right?", null);
+    });
+
+    // Fast-mode tags (script built via conversationalScript)
+    const CLASS_TAGS = {
+      laptop:'Frames Win Faster',
+      boots:'Grip Every Mile',
+      robot:'Play. Learn. Repeat.',
+      coffee_maker:'Barista Mornings, Home',
+      beverage_can:'Refresh the Moment',
+      car:'Built for the Rush',
+      generic_gadget:'Ready for Anything'
+    };
+    function simplCue(cue){
+      if (/sunlit green/.test(cue)) return 'green light and open air';
+      if (/bright blue-sky/.test(cue)) return 'blue light and clean lines';
+      if (/moody night/.test(cue)) return 'neon edges and shadow';
+      if (/warm indoor/.test(cue)) return 'warm wood and soft glow';
+      if (/soft overcast/.test(cue)) return 'soft gray and quiet detail';
+      if (/lush natural/.test(cue)) return 'leaf shade and earth';
+      return 'present tense energy';
+    }
+
+    async function craftTaglineAndScript(profile, product, cue, visualClass){
+      const fast = fastModeEl.checked;
+      let tagline = CLASS_TAGS[visualClass] || 'Built for the moment';
+      if (!fast){
+        // Keep LLM for tagline only (short) and build the script ourselves to stay conversational
+        try{
+          const out = await llmGenerate(
+            `Write a punchy <=8 word tagline for "${product.name}" suited to vibe "${cue}". Return only the tagline.`,
+            { maxOutputTokens: 24 }
+          );
+          const cleanTag = String(out||'').replace(/[\r\n]+/g,' ').trim().replace(/[.?!]+$/,'') || tagline;
+          tagline = cleanTag.slice(0, 48);
+        }catch{}
+      }
+      let script = conversationalScript(product, cue, tagline);
+      script = sanitizeCopy(script);
+      script = fitToTime(script, getCurrentRate(), 12.0);
+      return { tagline, script };
+    }
+
+    /* ========= Visual taxonomy ========= */
+    const ALLOWED_CLASSES = new Set(['laptop','boots','robot','coffee_maker','beverage_can','car','generic_gadget']);
+    function inferVisualClass(name, features='', hints=''){
+      const t = `${name||''} ${features||''} ${hints||''}`.toLowerCase();
+      if (/\bboot|shoe|hiking|trail|trek/.test(t)) return 'boots';
+      if (/\blaptop|gaming|computer|pc|notebook|gpu|keyboard/.test(t)) return 'laptop';
+      if (/\btoy|robot|edu|coding|stem/.test(t)) return 'robot';
+      if (/\bcoffee|espresso|maker|brew|barista|carafe|portafilter/.test(t)) return 'coffee_maker';
+      if (/\bcar|sports\s*car|coupe|0[–-]60|horsepower|hp\b/.test(t)) return 'car';
+      if (/\bcola|soda|drink|beverage|can|refresh/.test(t)) return 'beverage_can';
+      return 'generic_gadget';
+    }
+    const CLASS_TO_FORM = {
+      laptop: 'sleek gaming laptop', car: 'sleek two-door sports car', boots: 'rugged hiking boots',
+      robot: 'friendly toy robot', coffee_maker: 'compact countertop coffee maker',
+      beverage_can: 'unlabeled soda can', generic_gadget: 'modern consumer gadget'
+    };
+    const CLASS_NEGATIVES = {
+      laptop: 'no vehicles, no wheels, no steering or dashboard, no windshields',
+      car: 'no laptops, no keyboards or hinged screens, no keycaps',
+      boots: 'no electronics, no screens, no cables',
+      robot: 'no vehicles, no wheels',
+      coffee_maker: 'no vehicles, no wheels',
+      beverage_can: 'no vehicles, no labels or logos, no bottles',
+      generic_gadget: 'no vehicles'
+    };
+    function staticSpecForClass(cls){
+      const map = {
+        laptop: { key_parts:['thin lid','vented base','keyboard glow'], materials:['brushed metal','matte plastic'], palette:['gunmetal','black'] },
+        boots: { key_parts:['ankle support','tread sole','lace hooks'], materials:['nubuck','rubber'], palette:['earth','charcoal'] },
+        robot: { key_parts:['rounded head','LED eyes','arm joints'], materials:['matte plastic'], palette:['white','citrus accent'] },
+        coffee_maker:{ key_parts:['carafe','portafilter','steam wand'], materials:['steel','glass'], palette:['chrome','black'] },
+        beverage_can:{ key_parts:['aluminum cylinder','pull tab','matte finish'], materials:['aluminum'], palette:['neutral'] },
+        car:{ key_parts:['low coupe body','alloy wheels','LED strip'], materials:['painted metal','glass'], palette:['red','black'] },
+        generic_gadget:{ key_parts:['clean slab','single button'], materials:['matte plastic'], palette:['neutral'] }
+      };
+      return map[cls] || map.generic_gadget;
+    }
+
+    /* ========= World verification helpers ========= */
+    function meanPixelDelta(b64a, b64b){
+      return new Promise((resolve)=>{
+        const imgA = new Image(), imgB = new Image();
+        imgA.onload = ()=> {
+          imgB.onload = ()=>{
+            const w = 96, h = 54;
+            const c = document.createElement('canvas'); c.width=w; c.height=h;
+            const ctx = c.getContext('2d',{ willReadFrequently: true });
+            ctx.drawImage(imgA,0,0,w,h);
+            const a = ctx.getImageData(0,0,w,h).data;
+            ctx.clearRect(0,0,w,h);
+            ctx.drawImage(imgB,0,0,w,h);
+            const b = ctx.getImageData(0,0,w,h).data;
+            let sum=0, n=w*h;
+            for(let i=0;i<a.length;i+=4){
+              const dr=a[i]-b[i], dg=a[i+1]-b[i+1], db=a[i+2]-b[i+2];
+              sum += Math.abs(dr)+Math.abs(dg)+Math.abs(db);
+            }
+            resolve(sum/(n*3));
+          };
+          imgB.src = 'data:image/jpeg;base64,'+b64b;
+        };
+        imgA.src = 'data:image/jpeg;base64,'+b64a;
+      });
+    }
+
+    async function quickVerifyWorld(imageBase64, expectedClass, form, apiKey){
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${apiKey}`;
+      const prompt = [
+        `Return STRICT JSON:`,
+        `{"class":"one of [laptop,boots,robot,coffee_maker,beverage_can,car,generic_gadget]","keep_bg":"YES|NO","contact_surface":"YES|NO","floating":"YES|NO"}`,
+        `Class = inserted object's class. keep_bg = original scene background preserved.`,
+        `contact_surface = is the object clearly resting on/held by a real surface/hand.`,
+        `floating = object appears to float without contact.`,
+        `Expected form: ${form} (class ${expectedClass}).`
+      ].join('\n');
+      const payload = {
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: imageBase64 } }] }],
+        generationConfig: { maxOutputTokens: 32 }
+      };
+      try{
+        const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join(' ').trim() || '';
+        const obj = parseJsonLoose(text) || {};
+        const cls = String(obj.class||'').toLowerCase().replace(/\s+/g,'_');
+        const bgOk = /yes/i.test(String(obj.keep_bg||''));
+        const contactOk = /yes/i.test(String(obj.contact_surface||''));
+        const floating = /yes/i.test(String(obj.floating||''));
+        return { classOk: cls===expectedClass, bgOk, contactOk, floating };
+      }catch{
+        return { classOk: true, bgOk: true, contactOk: true, floating: false };
+      }
+    }
+
+    /* ========= Image generation ========= */
+    function baseInsertionPrompt(plan, hints){
+      return [
+        `EDIT THE ATTACHED FRAME (keep original background exactly).`,
+        `Insert ONE brand-agnostic lookalike: ${plan.form}. CLASS LOCK: ${plan.classKey}.`,
+        `Key parts: ${(plan.visualSpec.key_parts||[]).slice(0,5).join(', ') || 'core shape'}.`,
+        `Materials: ${(plan.visualSpec.materials||[]).slice(0,3).join(', ') || 'matte plastic/metal'}.`,
+        `Palette: ${(plan.visualSpec.palette||[]).slice(0,3).join(', ') || 'neutral/dark'}.`,
+        `Placement: ${plan.placement}; size ≈ ${plan.scalePct}%; camera ${plan.camera}; light ${plan.light}.`,
+        `If characters are present, allow NATURAL INTERACTION: resting in hand, on table/rock/dashboard near them, slight occlusion by fingers/clothing; add soft contact shadow.`,
+        `Blend: match perspective, color temperature, grain; avoid floating.`,
+        `HARD CONSTRAINTS: DO NOT replace or repaint the background; strictly avoid ${plan.negatives}; no logos or text.`,
+        hints ? `Hints: ${hints}` : ''
+      ].join(' ');
+    }
+    async function callImageGenWithRetry(url, payload, tries){
+      const RETRIABLE = new Set([408,429,500,502,503,504]);
+      let lastErr = '';
+      for (let attempt=0; attempt<tries; attempt++){
+        try{
+          const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+          if (!res.ok){
+            const txt = await res.text().catch(()=> '');
+            lastErr = `Image API ${res.status}: ${txt}`;
+            if (RETRIABLE.has(res.status)){ await new Promise(r=>setTimeout(r, 600*(attempt+1))); continue; }
+            throw new Error(lastErr);
+          }
+          const data = await res.json();
+          const parts = data?.candidates?.[0]?.content?.parts || [];
+          const imagePart = parts.find(p => p.inlineData)?.inlineData;
+          if (!imagePart?.data) throw new Error('Image API returned no image data');
+          return imagePart.data;
+        }catch(e){ lastErr = e.message || String(e); await new Promise(r=>setTimeout(r, 600*(attempt+1))); }
+      }
+      throw new Error(lastErr || 'Image API failed after retries');
+    }
+
+    async function generateAdCreative(profile, product, base64FrameData) {
+      const apiKey = apiKeyInput.value.trim();
+      const IMG_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${apiKey}`;
+
+      const sc = analyzeSceneHeuristics(videoEl);
+      const cue = sc.cue;
+      const fast = fastModeEl.checked;
+
+      const userClass = (product.visualClass||'').trim().toLowerCase();
+      const classKey = (new Set(['laptop','boots','robot','coffee_maker','beverage_can','car','generic_gadget']).has(userClass))
+        ? userClass
+        : inferVisualClass(product.name, product.features||'', product.hints||'');
+      const visualSpec = staticSpecForClass(classKey);
+      const plan = {
+        classKey,
+        form: CLASS_TO_FORM[classKey] || 'modern consumer gadget',
+        placement: placementFromCue(cue, classKey),
+        scalePct: 35,
+        camera: 'eye',
+        light: (/moody night/.test(cue)) ? 'neon night' : (/warm indoor/.test(cue) ? 'warm indoor' : (/soft overcast/.test(cue) ? 'overcast' : 'daylight')),
+        negatives: (CLASS_NEGATIVES[classKey] || ''),
+        visualSpec
+      };
+
+      const prompt = baseInsertionPrompt(plan, product.hints||'');
+      const payload = {
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64FrameData } }] }],
+        generationConfig: { responseModalities: ['IMAGE','TEXT'] }
+      };
+      let imgB64 = await callImageGenWithRetry(IMG_URL, payload, fast?2:4);
+
+      let verify = { classOk:true, bgOk:true, contactOk:true, floating:false };
+      try { verify = await quickVerifyWorld(imgB64, classKey, plan.form, apiKey); } catch {}
+      let delta = 0;
+      try { delta = await meanPixelDelta(base64FrameData, imgB64); } catch {}
+      const worldOk = verify.bgOk && verify.contactOk && !verify.floating && (delta < 42);
+
+      if (!(verify.classOk && worldOk)) {
+        const stronger = baseInsertionPrompt(plan, product.hints||'') + ' STRICT: keep original background; ensure clear surface/hand contact; partial occlusion allowed; NO global recolor; NO extra props.';
+        const retryPayload = {
+          contents: [{ parts: [{ text: stronger }, { inlineData: { mimeType: "image/jpeg", data: base64FrameData } }] }],
+          generationConfig: { responseModalities: ['IMAGE','TEXT'] }
+        };
+        try { imgB64 = await callImageGenWithRetry(IMG_URL, retryPayload, 1); } catch(e){ /* keep previous */ }
+      }
+
+      const { tagline, script } = await craftTaglineAndScript(profile, product, cue, classKey);
+
+      const accent = `rgb(${Math.min(255, (sc.meta?.avgR||120)+20)}, ${Math.min(255, (sc.meta?.avgG||120)+20)}, ${Math.min(255, (sc.meta?.avgB||120)+20)})`;
+      const immersion = { accent, filter: (()=>{
+        if (/sunlit green outdoors|lush natural/.test(cue)) return 'contrast(1.06) saturate(1.12)';
+        if (/bright blue-sky/.test(cue)) return 'brightness(1.06) saturate(1.1)';
+        if (/moody night/.test(cue)) return 'brightness(0.92) contrast(1.08) hue-rotate(-6deg)';
+        if (/warm indoor/.test(cue)) return 'sepia(0.06) contrast(1.05) saturate(1.08)';
+        if (/soft overcast/.test(cue)) return 'contrast(1.02) saturate(0.95)';
+        return 'contrast(1.03) saturate(1.02)';
+      })() };
+
+      return { generatedImageBase64: imgB64, script, tagline, cue, meta: sc.meta, plan, immersion };
+    }
+
+    /* ========= Display ad (image + “Ad” chip + product name; VO only) ========= */
+    function displayAd(adData, product, originalFrameJpg=null){
+      adLoader.style.display='none';
+      const imageUrl = `data:image/jpeg;base64,${adData.generatedImageBase64}`;
+      const accent = adData.immersion?.accent || '#22d3ee';
+      document.documentElement.style.setProperty('--accent', accent);
+
+      const originalBlock = originalFrameJpg ? `<img src="${originalFrameJpg}" class="ad-img ad-frame-original" alt="Original frame">` : '';
+      adContent.innerHTML = `
+        <div class="ad-video-container vignette">
+          ${originalBlock}
+          <img id="comp" src="${imageUrl}" class="ad-img ad-frame-composited ${originalFrameJpg?'':'show'}" alt="Composited ad frame">
+        </div>
+        <div class="absolute top-3 left-3 z-30">
+          <span class="chip inline-block px-3 py-1 rounded-full text-xs md:text-sm font-semibold shadow">Ad</span>
+        </div>
+        <div class="absolute bottom-3 left-3 z-30">
+          <span class="inline-block px-3 py-1 rounded-md bg-black/55 border border-white/10 text-xs md:text-sm font-semibold">${escapeHtml(product.name)}</span>
+        </div>`;
+      adContent.style.display='flex'; adOverlay.style.opacity=1; adOverlay.style.pointerEvents='auto';
+
+      const comp = adContent.querySelector('#comp');
+      comp.style.filter = adData.immersion?.filter || 'none';
+
+      if (originalFrameJpg){
+        requestAnimationFrame(()=>{
+          const compEl = adContent.querySelector('.ad-frame-composited');
+          const orig = adContent.querySelector('.ad-frame-original');
+          compEl.classList.add('show');
+          if (orig) orig.style.opacity = 0;
+        });
+      }
+
+      speakScript(adData.script || `${product.name}.`, () => {
+        setTimeout(() => {
+          adOverlay.style.opacity=0; adOverlay.style.pointerEvents='none'; adContent.style.display='none'; videoEl.play();
+        }, 600);
+      });
+    }
+
+    /* ========= Display helpers ========= */
+    function displayErrorAd(message){
+      appState.generatedAd=null; adLoader.style.display='none';
+      adContent.innerHTML = `<p class="text-red-400 text-xl">${escapeHtml(message)}</p>`;
+      adContent.style.display = 'flex';
+      setTimeout(()=>{ cancelAllSpeech(); adOverlay.style.opacity=0; adOverlay.style.pointerEvents='none'; adContent.style.display='none'; videoEl.play(); }, 2200);
+    }
+
+    /* ========= Catalog logging + edit/replay ========= */
+    function logAd(adData, user, product, timestamp){
+      const entry = {
+        id: Date.now(),
+        imageUrl: `data:image/jpeg;base64,${adData.generatedImageBase64}`,
+        tagline: adData.tagline,
+        script: adData.script,
+        user: user.name,
+        product: product.name,
+        productId: product.id,
+        video: (db.videos.find(v => v.id === appState.selectedVideoId) || {}).name || 'Video',
+        timestamp: timestamp.toFixed(2),
+        immersion: adData.immersion || {}
+      };
+      appState.adLog.unshift(entry); renderAdLog();
+    }
+
+    function renderAdLog(){
+      if (!appState.adLog.length) { adLogContainer.innerHTML = `<p class="text-gray-500 text-center">Generated ads will appear here...</p>`; return; }
+      adLogContainer.innerHTML = appState.adLog.map(e => `
+        <div class="bg-gray-700 rounded-lg p-3" data-adid="${e.id}">
+          <img src="${e.imageUrl}" class="rounded-md mb-2" alt="Generated ad">
+          <p class="font-semibold text-white">"${escapeHtml(e.tagline)}"</p>
+          <p class="text-xs text-gray-300 mt-1">${escapeHtml(e.script||'')}</p>
+          <div class="mt-2 flex gap-2">
+            <button class="btn btn-cyan replay-btn">Replay</button>
+            <button class="btn edit-ad-btn">Edit Script</button>
+            <button class="btn btn-ghost copy-btn">Copy Script</button>
+          </div>
+          <p class="text-sm text-cyan-300 mt-2">${escapeHtml(e.product)}</p>
+          <p class="text-xs text-gray-400 mt-1">For: ${escapeHtml(e.user)} | In: ${escapeHtml(e.video)} @ ${escapeHtml(e.timestamp)}s</p>
+        </div>`).join('');
+
+      adLogContainer.querySelectorAll('.replay-btn').forEach(btn=>{
+        btn.addEventListener('click', (ev)=>{
+          const card = ev.target.closest('[data-adid]'); const id = parseInt(card.dataset.adid,10);
+          const entry = appState.adLog.find(a => a.id === id);
+          if (!entry) return;
+          videoEl.pause();
+          const product = db.products.find(p=>p.id===entry.productId) || { name: entry.product };
+          const adData = { generatedImageBase64: (entry.imageUrl.split(',')[1]||''), script: entry.script, immersion: entry.immersion };
+          adLoader.style.display='none'; adContent.style.display='none'; adOverlay.style.opacity=1; adOverlay.style.pointerEvents='auto';
+          displayAd(adData, product, null);
+        });
+      });
+      adLogContainer.querySelectorAll('.copy-btn').forEach(btn=>{
+        btn.addEventListener('click', (ev)=>{
+          const card = ev.target.closest('[data-adid]'); const id = parseInt(card.dataset.adid,10);
+          const entry = appState.adLog.find(a => a.id === id);
+          if (!entry) return;
+          navigator.clipboard?.writeText(entry.script||'').then(()=>{}).catch(()=>{});
+        });
+      });
+      adLogContainer.querySelectorAll('.edit-ad-btn').forEach(btn=>{
+        btn.addEventListener('click', (ev)=>{
+          const card = ev.target.closest('[data-adid]'); const id = parseInt(card.dataset.adid,10);
+          const entry = appState.adLog.find(a => a.id === id); if (!entry) return;
+          openModal(entry, 'adLog', [
+            { id:'tagline', label:'Tagline', type:'text' },
+            { id:'script', label:'Narration Script', type:'textarea' }
+          ], 'Generated Ad');
+          document.getElementById('modal-delete').style.display='block';
+        });
+      });
+    }
+
+    /* ========= Init ========= */
+    const userModule = createCrudModule('users-module','users','User Profiles',[{id:'name',label:'Name',type:'text'},{id:'profile',label:'Profile Description',type:'textarea'}]);
+    const videoModule = createCrudModule('videos-module','videos','Video Streams',[{id:'name',label:'Video Name',type:'text'},{id:'url',label:'Video URL',type:'text'}]);
+    const productModule = createCrudModule('products-module','products','Advertiser Products',[
+      {id:'name',label:'Product Name',type:'text'},
+      {id:'features',label:'Features',type:'textarea'},
+      {id:'visualClass',label:'Visual Class (optional: laptop, boots, robot, coffee_maker, beverage_can, car, generic_gadget)',type:'text'},
+      {id:'hints',label:'Generation Hints (optional)',type:'textarea'},
+      {id:'imageUrl',label:'Image URL (ignored for generation)',type:'text'}
+    ]);
+    function renderAll(){ userModule.render(); videoModule.render(); productModule.render(); }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      loadDb(); setupModalListeners();
+      // Never persist or autofill the API key
+      apiKeyInput.value = '';
+
+      if (db.users.length && !appState.selectedUserId) appState.selectedUserId = db.users[0].id;
+      if (db.videos.length && !appState.selectedVideoId) { appState.selectedVideoId = db.videos[0].id; videoEl.src = db.videos[0].url; }
+      renderAll(); renderAdLog();
+
+      await ensureVoicesReady(); loadVoices(); setTimeout(loadVoices, 400);
+
+      try { await use.load(); } catch(e){ console.warn('USE warmup failed', e); }
+      await refreshRanking(true);
+    });
+
+    window.addEventListener('beforeunload', ()=>{ cancelAllSpeech(); });
+  </script>
+</body>
+</html>
